@@ -21,18 +21,14 @@ USERS = {
 def api_post(path: str, json: dict):
     url = f"{API_BASE_URL}{path}"
     resp = requests.post(url, json=json, timeout=15)
-    if not resp.ok:
-        st.error(f"API error {resp.status_code}: {resp.text}")
-        return None
+    resp.raise_for_status()
     return resp.json()
 
 
-def api_get(path: str):
+def api_get(path: str, params: dict | None = None):
     url = f"{API_BASE_URL}{path}"
-    resp = requests.get(url, timeout=15)
-    if not resp.ok:
-        st.error(f"API error {resp.status_code}: {resp.text}")
-        return None
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
     return resp.json()
 
 
