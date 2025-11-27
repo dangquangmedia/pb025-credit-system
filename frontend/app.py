@@ -2,7 +2,7 @@ import os
 import requests
 import streamlit as st
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8080")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8000")
 
 # =============================
 # Fake user DB cho demo
