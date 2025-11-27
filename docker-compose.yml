@@ -13,16 +13,15 @@ services:
 
   ui:
     build:
-      context: ./backend
+      context: ./frontend          # <--- Đổi từ ./backend sang ./frontend
       dockerfile: Dockerfile
     container_name: pb025-ui
-    # Chạy Streamlit UI
-    command: streamlit run app_streamlit_ui.py --server.port 8501 --server.address 0.0.0.0
+    # chạy Streamlit UI
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
     environment:
-      # Cho UI biết URL của API trong network docker
       - API_BASE_URL=http://api:8000
     ports:
       - "8501:8501"
     depends_on:
       - api
-    restart: unless-stopped
+
