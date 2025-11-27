@@ -1,0 +1,27 @@
+# ==== Python / IDE ====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.log
+
+.vscode/
+.idea/
+
+# ==== Virtual env ====
+venv/
+.venv/
+
+# ==== Data & models (KHÔNG đẩy data nặng lên Git) ====
+backend/data/
+backend/mlruns/
+backend/models/
+backend/__pycache__/
+backend/*.joblib
+
+# Nếu có thêm thư mục chứa file .csv/.parquet/.pkl nặng thì thêm vào đây
+
+# ==== Streamlit / cache ====
+.streamlit/
+.cache/

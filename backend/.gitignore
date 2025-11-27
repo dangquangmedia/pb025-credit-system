@@ -1,0 +1,38 @@
+# ==== Python cache ====
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# ==== Virtual env ====
+venv/
+.venv/
+env/
+.env/
+
+# ==== Streamlit ====
+.streamlit/
+
+# ==== Project specific big folders ====
+backend/data/
+backend/mlruns/
+mlruns/
+
+# ==== Models & artifacts ====
+*.pkl
+*.joblib
+*.model
+*.bin
+
+# ==== Logs, tmp ====
+*.log
+*.tmp
+*.cache/
+
+# ==== VSCode ====
+.vscode/
+
+# ==== OS files ====
+.DS_Store
+Thumbs.db
