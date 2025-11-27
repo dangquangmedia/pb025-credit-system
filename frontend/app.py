@@ -259,7 +259,8 @@ def login():
                 "username": username,
                 "role": user["role"],
             }
-            st.experimental_rerun()
+            st.rerun()
+
 
 
 def main():
@@ -282,7 +283,8 @@ def main():
         st.write(f"Role: `{role}`")
         if st.button("Đăng xuất"):
             st.session_state.pop("user")
-            st.experimental_rerun()
+            st.rerun()
+
 
     if role == "citizen":
         page_citizen(username)
