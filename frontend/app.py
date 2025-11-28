@@ -2,7 +2,9 @@ import os
 import requests
 import streamlit as st
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8000")
+# ==== CẤU HÌNH API GỌI TỚI BACKEND TRONG DOCKER NETWORK ====
+# Ép dùng host "api" (tên service trong docker-compose), port 8000
+API_BASE_URL = "http://api:8000"
 
 # =============================
 # Fake user DB cho demo
@@ -19,6 +21,7 @@ USERS = {
 
 
 def api_post(path: str, json: dict):
+    """Gọi POST tới backend"""
     url = f"{API_BASE_URL}{path}"
     resp = requests.post(url, json=json, timeout=15)
     resp.raise_for_status()
@@ -26,6 +29,7 @@ def api_post(path: str, json: dict):
 
 
 def api_get(path: str, params: dict | None = None):
+    """Gọi GET tới backend"""
     url = f"{API_BASE_URL}{path}"
     resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
@@ -178,26 +182,30 @@ def page_banker(username: str):
             data = api_post("/api/v1/score", payload)
             if data:
                 st.success("Đã nhận kết quả từ AI Scoring")
-                st.metric("PD (Probability of Default)", f"{data['pd']:.2f}%")
-                st.metric("Raw Score (logit)", f"{data['score_raw']:.3f}")
-                st.write("Grade bucket:", data["grade_bucket"])
-                st.write("Audit ID:", data["audit_id"])
-                st.write("Khuyến nghị (gợi ý):")
-                if data["pd"] < 5:
-                    st.success("Có thể phê duyệt nhanh (low risk).")
-                elif data["pd"] < 15:
-                    st.info("Nên phê duyệt có điều kiện, kiểm tra thêm CIC & thu nhập.")
-                elif data["pd"] < 30:
-                    st.warning("Cần xem xét kỹ, nên bổ sung tài sản bảo đảm / đồng bảo lãnh.")
-                else:
-                    st.error("Khuyến nghị: Từ chối hoặc yêu cầu giảm hạn mức.")
+                # Chuẩn hoá key để tránh KeyError khi backend đổi tên trường
+                pd_val = data.get("pd_12m") or data.get("pd")
+                credit_score = data.get("credit_score") or data.get("score")
+                risk_band = data.get("risk_band") or data.get("band")
+                decision = data.get("policy_decision") or data.get("decision")
 
-                with st.expander("Key factors (VI)"):
-                    for f in data["factors_vi"]:
-                        st.write("- ", f)
-                with st.expander("Key factors (EN)"):
-                    for f in data["factors_en"]:
-                        st.write("- ", f)
+                col1, col2, col3, col4 = st.columns(4)
+
+                with col1:
+                    if pd_val is not None:
+                        # pd_val = 0.32  -> 32.00%
+                        st.metric("PD (Probability of Default)", f"{pd_val:.2%}")
+                    else:
+                        st.metric("PD (Probability of Default)", "N/A")
+
+                with col2:
+                    st.metric("Credit Score", credit_score if credit_score is not None else "N/A")
+
+                with col3:
+                    st.metric("Risk Band", risk_band if risk_band is not None else "N/A")
+
+                with col4:
+                    st.metric("Policy Decision", decision if decision is not None else "N/A")
+
 
 
 def page_supervisor(username: str):
@@ -255,6 +263,8 @@ def login():
                 "username": username,
                 "role": user["role"],
             }
+            # Streamlit sẽ tự rerun khi click button,
+            # nhưng ta gọi thêm cho chắc.
             st.rerun()
 
 
@@ -277,10 +287,10 @@ def main():
     with st.sidebar:
         st.write(f"Xin chào, **{username}**")
         st.write(f"Role: `{role}`")
+        st.caption(f"API_BASE_URL = {API_BASE_URL}")
         if st.button("Đăng xuất"):
-            st.session_state.pop("user")
+            st.session_state.pop("user", None)
             st.rerun()
-
 
     if role == "citizen":
         page_citizen(username)
