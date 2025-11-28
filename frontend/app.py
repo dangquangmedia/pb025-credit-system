@@ -20,15 +20,41 @@ USERS = {
 
 
 # ============================================
-# Helpers gọi API
+# Helpers gọi API (có fallback path cũ)
 # ============================================
-def api_post(path: str, json: dict):
-    """Gọi POST tới backend, path bắt đầu bằng /"""
+def _post_with_fallback(path: str, json: dict):
+    """Thử gọi path mới /api/v1/...; nếu 404 thì fallback sang path cũ (bỏ /api/v1)."""
     url = f"{API_BASE_URL}{path}"
+    resp = requests.post(url, json=json, timeout=15)
+
+    # Nếu backend đang dùng path cũ -> thử lại
+    if resp.status_code == 404 and path.startswith("/api/v1/"):
+        alt_path = path.replace("/api/v1", "", 1)
+        alt_url = f"{API_BASE_URL}{alt_path}"
+        resp = requests.post(alt_url, json=json, timeout=15)
+
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _get_with_fallback(path: str, params: dict | None = None):
+    """Thử gọi path mới /api/v1/...; nếu 404 thì fallback sang path cũ (bỏ /api/v1)."""
+    url = f"{API_BASE_URL}{path}"
+    resp = requests.get(url, params=params, timeout=15)
+
+    if resp.status_code == 404 and path.startswith("/api/v1/"):
+        alt_path = path.replace("/api/v1", "", 1)
+        alt_url = f"{API_BASE_URL}{alt_path}"
+        resp = requests.get(alt_url, params=params, timeout=15)
+
+    resp.raise_for_status()
+    return resp.json()
+
+
+def api_post(path: str, json: dict):
+    """Wrapper có hiển thị lỗi đẹp trong Streamlit."""
     try:
-        resp = requests.post(url, json=json, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        return _post_with_fallback(path, json)
     except requests.RequestException as e:
         status = getattr(e.response, "status_code", "N/A")
         st.error(f"API error {status}: {e}")
@@ -36,12 +62,9 @@ def api_post(path: str, json: dict):
 
 
 def api_get(path: str, params: dict | None = None):
-    """Gọi GET tới backend, path bắt đầu bằng /"""
-    url = f"{API_BASE_URL}{path}"
+    """Wrapper có hiển thị lỗi đẹp trong Streamlit."""
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        return _get_with_fallback(path, params)
     except requests.RequestException as e:
         status = getattr(e.response, "status_code", "N/A")
         st.error(f"API error {status}: {e}")
@@ -67,7 +90,6 @@ def login():
                 "username": username,
                 "role": user["role"],
             }
-            # Streamlit 1.39 dùng st.rerun()
             st.rerun()
 
 
@@ -98,6 +120,46 @@ def page_citizen(username: str):
         "Khu vực này demo, chưa kết nối API thật. "
         "Mục đích là cho BGK thấy flow công dân → banker."
     )
+
+
+def _extract_pd_and_score(data: dict):
+    """
+    Hỗ trợ cả JSON cũ và mới:
+    - pd_12m hoặc pd
+    - credit_score hoặc score_raw
+    """
+    # PD
+    pd_percent = None
+    if "pd_12m" in data:
+        try:
+            pd_percent = float(data["pd_12m"]) * 100.0
+        except Exception:
+            pd_percent = None
+    elif "pd" in data:
+        try:
+            val = float(data["pd"])
+            # nếu <=1 coi như probability, nếu >1 coi như % luôn
+            pd_percent = val * 100.0 if val <= 1.0 else val
+        except Exception:
+            pd_percent = None
+
+    # Score
+    score = data.get("credit_score")
+    if score is None:
+        score = data.get("score_raw")
+
+    # Risk band / grade
+    risk_band = data.get("risk_band") or data.get("grade_bucket") or "N/A"
+
+    # Policy decision
+    policy_decision = (
+        data.get("policy_decision") or data.get("decision") or data.get("policy") or "N/A"
+    )
+
+    # Audit id
+    audit_id = data.get("audit_id") or data.get("audit_trail_id") or "N/A"
+
+    return pd_percent, score, risk_band, policy_decision, audit_id
 
 
 def page_banker(username: str):
@@ -145,7 +207,7 @@ def page_banker(username: str):
     submitted = st.button("GỬI YÊU CẦU THẨM ĐỊNH")
 
     if submitted:
-        # payload tối giản gửi lên /api/v1/score
+        # payload tối giản gửi lên API
         payload = {
             # Demo: loan_amount ≈ annual_income × DTI
             "loan_amount": income * (dti / 100.0),
@@ -154,42 +216,46 @@ def page_banker(username: str):
             "loan_purpose": purpose,
         }
 
+        # Thử path mới, nếu backend vẫn dùng path cũ sẽ tự fallback
         data = api_post("/api/v1/score", payload)
         if not data:
             return
 
-        # Backend trả về: pd_12m (0.32 = 32%), credit_score, risk_band, policy_decision, audit_id
-        pd_12m = float(data.get("pd_12m", 0.0)) * 100.0
-        credit_score = data.get("credit_score", "N/A")
-        risk_band = data.get("risk_band", "N/A")
-        policy_decision = data.get("policy_decision", "N/A")
-        audit_id = data.get("audit_id", "N/A")
+        pd_percent, score, risk_band, policy_decision, audit_id = _extract_pd_and_score(
+            data
+        )
 
         st.success("Đã nhận kết quả từ AI Scoring")
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.metric("PD 12 tháng (Probability of Default)", f"{pd_12m:.2f}%")
-        with col_b:
-            st.metric("Credit Score (demo)", f"{credit_score}")
+        if pd_percent is not None:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("PD 12 tháng (Probability of Default)", f"{pd_percent:.2f}%")
+            with col_b:
+                st.metric(
+                    "Credit Score (demo)", f"{score}" if score is not None else "N/A"
+                )
+        else:
+            st.write("Không đọc được PD từ API (pd_12m / pd).")
 
         st.write("**Risk band:**", risk_band)
         st.write("**Policy decision (gợi ý):**", policy_decision)
         st.write("**Audit ID:**", audit_id)
 
-        # Gợi ý đơn giản dựa trên PD
-        if pd_12m < 5:
-            st.success("Khuyến nghị: Có thể phê duyệt nhanh (low risk).")
-        elif pd_12m < 15:
-            st.info(
-                "Khuyến nghị: Phê duyệt có điều kiện, kiểm tra thêm CIC & thu nhập."
-            )
-        elif pd_12m < 30:
-            st.warning(
-                "Khuyến nghị: Cần xem xét kỹ, nên yêu cầu tài sản bảo đảm / đồng bảo lãnh."
-            )
-        else:
-            st.error("Khuyến nghị: Từ chối hoặc yêu cầu giảm hạn mức.")
+        # Gợi ý đơn giản dựa trên PD (nếu có)
+        if pd_percent is not None:
+            if pd_percent < 5:
+                st.success("Khuyến nghị: Có thể phê duyệt nhanh (low risk).")
+            elif pd_percent < 15:
+                st.info(
+                    "Khuyến nghị: Phê duyệt có điều kiện, kiểm tra thêm CIC & thu nhập."
+                )
+            elif pd_percent < 30:
+                st.warning(
+                    "Khuyến nghị: Cần xem xét kỹ, nên yêu cầu tài sản bảo đảm / đồng bảo lãnh."
+                )
+            else:
+                st.error("Khuyến nghị: Từ chối hoặc yêu cầu giảm hạn mức.")
 
 
 def page_supervisor(username: str):
@@ -249,7 +315,6 @@ def main():
     with st.sidebar:
         st.write(f"Xin chào, **{username}**")
         st.write(f"Role: `{role}`")
-        # debug: xem API_BASE_URL thực tế trong container
         st.caption(f"API_BASE_URL = {API_BASE_URL}")
         if st.button("Đăng xuất"):
             st.session_state.pop("user", None)
