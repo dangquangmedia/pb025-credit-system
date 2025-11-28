@@ -148,90 +148,127 @@ def page_citizen(username: str):
 
 
 def page_banker(username: str):
-    st.title("PB-025 – Dashboard Thẩm định tín dụng (Banker Portal)")
-    st.caption("Ngân hàng dùng để gửi hồ sơ và xem kết quả AI scoring")
+    st.title("PB-025 – Banking Dashboard (Banker Portal)")
+    st.caption("Demo thẩm định hồ sơ vay dựa trên AI scoring.")
 
-    with st.form("banker_form"):
-        national_id = st.text_input("Customer National ID", "012345678901")
-        name = st.text_input("Customer Name (optional)", "Nguyen Van A")
-        loan_amount = st.number_input("Desired Loan Amount (VND)", value=300_000_000, step=10_000_000)
-        product = st.selectbox("Loan Product", ["Personal Loan", "Car Loan", "Mortgage", "Credit Card"])
-        tenor = st.number_input("Loan Tenure (Months)", value=36, min_value=3, max_value=120)
-        income = st.number_input("Customer Annual Income (VND)", value=200_000_000, step=10_000_000)
-        dti = st.number_input("Debt-To-Income (DTI) %", value=40.0)
-        grade = st.selectbox("Current CIC-like Grade", ["A", "B", "C", "D", "E", "F", "G"])
-        home = st.selectbox("Home Ownership", ["OWN", "MORTGAGE", "RENT"])
+    with st.form("loan_form"):
+        st.subheader("Thông tin khoản vay")
+        loan_amount = st.number_input(
+            "Loan Amount (VND)",
+            min_value=0,
+            max_value=10_000_000_000,
+            step=1_000_000,
+            value=200_000_000,
+        )
+        tenor = st.number_input(
+            "Loan Tenure (Months)",
+            min_value=1,
+            max_value=120,
+            value=36,
+        )
+        income = st.number_input(
+            "Customer Annual Income (VND)",
+            min_value=0,
+            max_value=10_000_000_000,
+            step=1_000_000,
+            value=20_000_000,
+        )
+        dti = st.number_input(
+            "Debt-To-Income (DTI) %",
+            min_value=0.0,
+            max_value=200.0,
+            value=40.0,
+        )
+
+        st.subheader("Thông tin CIC & mục đích vay")
+        grade = st.selectbox(
+            "Current CIC-like Grade",
+            ["A", "B", "C", "D"],
+        )
+        home = st.selectbox(
+            "Home Ownership",
+            ["OWN", "MORTGAGE", "RENT"],
+        )
         purpose = st.selectbox(
             "Purpose of Loan",
-            ["debt_consolidation", "credit_card", "car", "small_business", "house", "other"],
+            [
+                "debt_consolidation",
+                "home_improvement",
+                "credit_card",
+                "small_business",
+                "other",
+            ],
         )
 
         submitted = st.form_submit_button("GỬI YÊU CẦU THẨM ĐỊNH")
 
-            if submitted:
-                payload = {
-                    "national_id": national_id,
-                    "loan_amount": loan_amount,
-                    "loan_tenor_months": tenor,
-                    "annual_income": income,
-                    "dti": dti,
-                    "grade": grade,
-                    "home_ownership": home,
-                    "purpose": purpose,
-                }
-        
-                data = api_post("/api/v1/score", payload)
-                if not data:
-                    return
-        
-                # API hiện trả về pd_12m dạng 0.32 ~ 32% (demo)
-                raw_pd = data.get("pd_12m")
-                pd_pct = None
-                if raw_pd is not None:
-                    # giả sử 0–1 -> %
-                    pd_pct = raw_pd * 100 if raw_pd <= 1 else raw_pd
-        
-                credit_score = data.get("credit_score")
-                risk_band = data.get("risk_band")
-                policy_decision = data.get("policy_decision")
-                audit_id = data.get("audit_id")
-        
-                st.success("Đã nhận kết quả từ AI Scoring")
-        
-                if pd_pct is not None:
-                    st.metric("PD (Probability of Default)", f"{pd_pct:.2f}%")
-        
-                if credit_score is not None:
-                    st.metric("Credit Score", credit_score)
-        
-                if risk_band:
-                    st.write("Risk band:", risk_band)
-        
-                if policy_decision:
-                    st.write("Quyết định chính sách (demo):", policy_decision)
-        
-                if audit_id:
-                    st.write("Audit ID:", audit_id)
-        
-                # Gợi ý quyết định dựa trên PD
-                if pd_pct is not None:
-                    if pd_pct < 5:
-                        st.success("Có thể phê duyệt nhanh (low risk).")
-                    elif pd_pct < 15:
-                        st.info("Nên phê duyệt có điều kiện, kiểm tra thêm CIC & thu nhập.")
-                    elif pd_pct < 30:
-                        st.warning("Cần xem xét kỹ, nên bổ sung tài sản bảo đảm / đồng bảo lãnh.")
-                    else:
-                        st.error("Khuyến nghị: Từ chối hoặc yêu cầu giảm hạn mức.")
-        
-                # Các field factors_* hiện backend demo chưa trả về, tránh KeyError:
-                with st.expander("Key factors (VI)"):
-                    for f in data.get("factors_vi", []):
-                        st.write("- ", f)
-        
-                with st.expander("Key factors (EN)"):
-                    for f in data.get("factors_en", []):
-                        st.write("- ", f)
+        if submitted:
+            # Payload gửi lên API (API thật chỉ cần loan_amount, loan_product etc.,
+            # nhưng extra field backend demo sẽ bỏ qua)
+            payload = {
+                "loan_amount": loan_amount,
+                "loan_tenor_months": tenor,
+                "annual_income": income,
+                "dti": dti,
+                "grade": grade,
+                "home_ownership": home,
+                "purpose": purpose,
+            }
+
+            data = api_post("/api/v1/score", payload)
+            if not data:
+                return
+
+            # API trả về pd_12m ~ 0.32 (tức 32% trong 12 tháng)
+            raw_pd = data.get("pd_12m")
+            pd_pct = None
+            if raw_pd is not None:
+                pd_pct = raw_pd * 100 if raw_pd <= 1 else raw_pd
+
+            credit_score = data.get("credit_score")
+            risk_band = data.get("risk_band")
+            policy_decision = data.get("policy_decision")
+            audit_id = data.get("audit_id")
+
+            st.success("Đã nhận kết quả từ AI Scoring")
+
+            if pd_pct is not None:
+                st.metric("PD (Probability of Default)", f"{pd_pct:.2f}%")
+
+            if credit_score is not None:
+                st.metric("Credit Score", credit_score)
+
+            if risk_band:
+                st.write("Risk band:", risk_band)
+
+            if policy_decision:
+                st.write("Quyết định chính sách (demo):", policy_decision)
+
+            if audit_id:
+                st.write("Audit ID:", audit_id)
+
+            # Gợi ý quyết định theo PD
+            if pd_pct is not None:
+                if pd_pct < 5:
+                    st.success("Có thể phê duyệt nhanh (low risk).")
+                elif pd_pct < 15:
+                    st.info("Nên phê duyệt có điều kiện, kiểm tra thêm CIC & thu nhập.")
+                elif pd_pct < 30:
+                    st.warning(
+                        "Cần xem xét kỹ, nên bổ sung tài sản bảo đảm / đồng bảo lãnh."
+                    )
+                else:
+                    st.error("Khuyến nghị: Từ chối hoặc yêu cầu giảm hạn mức.")
+
+            # Các field factors_* hiện backend có thể chưa trả về, nên dùng get(..., [])
+            with st.expander("Key factors (VI)"):
+                for f in data.get("factors_vi", []):
+                    st.write("- ", f)
+
+            with st.expander("Key factors (EN)"):
+                for f in data.get("factors_en", []):
+                    st.write("- ", f)
+
 
 def page_supervisor(username: str):
     st.title("PB-025 – Dashboard Giám sát (Supervisor / Regulator Portal)")
