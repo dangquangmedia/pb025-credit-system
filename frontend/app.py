@@ -168,78 +168,104 @@ def page_banker(username: str):
 
         submitted = st.form_submit_button("GỬI YÊU CẦU THẨM ĐỊNH")
 
-        if submitted:
-            payload = {
-                "national_id": national_id,
-                "loan_amount": loan_amount,
-                "loan_tenor_months": tenor,
-                "annual_income": income,
-                "dti": dti,
-                "grade": grade,
-                "home_ownership": home,
-                "purpose": purpose,
-            }
-            data = api_post("/api/v1/score", payload)
-            if data:
+            if submitted:
+                payload = {
+                    "national_id": national_id,
+                    "loan_amount": loan_amount,
+                    "loan_tenor_months": tenor,
+                    "annual_income": income,
+                    "dti": dti,
+                    "grade": grade,
+                    "home_ownership": home,
+                    "purpose": purpose,
+                }
+        
+                data = api_post("/api/v1/score", payload)
+                if not data:
+                    return
+        
+                # API hiện trả về pd_12m dạng 0.32 ~ 32% (demo)
+                raw_pd = data.get("pd_12m")
+                pd_pct = None
+                if raw_pd is not None:
+                    # giả sử 0–1 -> %
+                    pd_pct = raw_pd * 100 if raw_pd <= 1 else raw_pd
+        
+                credit_score = data.get("credit_score")
+                risk_band = data.get("risk_band")
+                policy_decision = data.get("policy_decision")
+                audit_id = data.get("audit_id")
+        
                 st.success("Đã nhận kết quả từ AI Scoring")
-                # Chuẩn hoá key để tránh KeyError khi backend đổi tên trường
-                pd_val = data.get("pd_12m") or data.get("pd")
-                credit_score = data.get("credit_score") or data.get("score")
-                risk_band = data.get("risk_band") or data.get("band")
-                decision = data.get("policy_decision") or data.get("decision")
-
-                col1, col2, col3, col4 = st.columns(4)
-
-                with col1:
-                    if pd_val is not None:
-                        # pd_val = 0.32  -> 32.00%
-                        st.metric("PD (Probability of Default)", f"{pd_val:.2%}")
+        
+                if pd_pct is not None:
+                    st.metric("PD (Probability of Default)", f"{pd_pct:.2f}%")
+        
+                if credit_score is not None:
+                    st.metric("Credit Score", credit_score)
+        
+                if risk_band:
+                    st.write("Risk band:", risk_band)
+        
+                if policy_decision:
+                    st.write("Quyết định chính sách (demo):", policy_decision)
+        
+                if audit_id:
+                    st.write("Audit ID:", audit_id)
+        
+                # Gợi ý quyết định dựa trên PD
+                if pd_pct is not None:
+                    if pd_pct < 5:
+                        st.success("Có thể phê duyệt nhanh (low risk).")
+                    elif pd_pct < 15:
+                        st.info("Nên phê duyệt có điều kiện, kiểm tra thêm CIC & thu nhập.")
+                    elif pd_pct < 30:
+                        st.warning("Cần xem xét kỹ, nên bổ sung tài sản bảo đảm / đồng bảo lãnh.")
                     else:
-                        st.metric("PD (Probability of Default)", "N/A")
-
-                with col2:
-                    st.metric("Credit Score", credit_score if credit_score is not None else "N/A")
-
-                with col3:
-                    st.metric("Risk Band", risk_band if risk_band is not None else "N/A")
-
-                with col4:
-                    st.metric("Policy Decision", decision if decision is not None else "N/A")
-
-
+                        st.error("Khuyến nghị: Từ chối hoặc yêu cầu giảm hạn mức.")
+        
+                # Các field factors_* hiện backend demo chưa trả về, tránh KeyError:
+                with st.expander("Key factors (VI)"):
+                    for f in data.get("factors_vi", []):
+                        st.write("- ", f)
+        
+                with st.expander("Key factors (EN)"):
+                    for f in data.get("factors_en", []):
+                        st.write("- ", f)
 
 def page_supervisor(username: str):
     st.title("PB-025 – Dashboard Giám sát (Supervisor / Regulator Portal)")
-    st.caption("Dùng dữ liệu loan_2014_18 (train) & loan_2019_20 (test) để minh hoạ")
+    st.caption("Dùng dữ liệu demo tổng hợp để minh hoạ health của mô hình.")
 
     data = api_get("/api/v1/dashboard/summary")
     if not data:
+        st.error("Không lấy được dữ liệu dashboard từ API.")
         return
 
-    col1, col2 = st.columns(2)
+    stats = data.get("stats", {})
+    by_decision = data.get("by_decision", [])
+    note = data.get("note", "")
+
+    total = stats.get("total", 0)
+    approved = stats.get("approved", 0)
+    rejected = stats.get("rejected", 0)
+    avg_pd = stats.get("avg_pd", 0.0)
+
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.subheader("Tập Train (2014–2018)")
-        st.metric("Số khoản vay", data["train_total"])
-        st.metric("Bad rate", f"{data['train_bad_rate']*100:.2f}%")
+        st.metric("Tổng hồ sơ", total)
     with col2:
-        st.subheader("Tập Test (2019–2020)")
-        st.metric("Số khoản vay", data["test_total"])
-        st.metric("Bad rate", f"{data['test_bad_rate']*100:.2f}%")
+        approve_rate = (approved / total * 100) if total else 0
+        st.metric("Tỷ lệ phê duyệt", f"{approve_rate:.1f}%")
+    with col3:
+        st.metric("PD trung bình", f"{avg_pd*100:.2f}%")
 
-    st.subheader("Phân bố theo Grade (Train)")
-    grade_bd = data.get("grade_breakdown", {})
-    if not grade_bd:
-        st.info("Không có dữ liệu grade.")
-    else:
-        st.write("Grade | Count | Bad rate")
-        for g, info in grade_bd.items():
-            st.write(f"{g} | {info['count']} | {info['bad_rate']*100:.2f}%")
+    st.subheader("Phân bố theo quyết định")
+    for row in by_decision:
+        st.write(f"- {row.get('decision')}: {row.get('count')} hồ sơ")
 
-    st.info(
-        "Đây là giao diện để cơ quan giám sát / ngân hàng nhà nước "
-        "theo dõi chất lượng danh mục tín dụng, so sánh train/test, "
-        "và phát hiện drift."
-    )
+    if note:
+        st.info(note)
 
 
 # =============================
