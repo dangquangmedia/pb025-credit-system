@@ -1,181 +1,242 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-from datetime import datetime
-import math
-import hashlib
-import uuid
+import os
+import requests
+import streamlit as st
 
-app = FastAPI(
-    title="PB-025 Scoring API (demo)",
-    version="0.1.0",
-    description="Demo API chấm điểm tín dụng cho PB-025",
-)
+# Host API trong docker-compose: api:8000
+API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8000")
 
-
-# ==========
-#  Models
-# ==========
-
-class ScoreRequest(BaseModel):
-    national_id: Optional[str] = None
-    loan_amount: float
-    loan_tenor_months: int = 36
-    annual_income: Optional[float] = None
-    dti: Optional[float] = None
-    grade: Optional[str] = None
-    home_ownership: Optional[str] = None
-    purpose: Optional[str] = None
+# Fake user DB
+USERS = {
+    "citizen01": {"password": "citizen123", "role": "citizen"},
+    "banker01": {"password": "banker123", "role": "banker"},
+    "super01": {"password": "super123", "role": "supervisor"},
+}
 
 
-# ==========
-#  Helpers
-# ==========
+# =========================
+#  Helpers gọi API backend
+# =========================
 
-def _hash_citizen(national_id: Optional[str]) -> str:
-    if not national_id:
-        national_id = "anonymous"
-    h = hashlib.sha256(national_id.encode("utf-8")).hexdigest()
-    # rút gọn cho dễ nhìn
-    return h[:12]
+def api_post(path: str, json: dict):
+    url = f"{API_BASE_URL}{path}"
+    try:
+        resp = requests.post(url, json=json, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        st.error(f"API error: {e}")
+        return None
 
 
-def _synthetic_score(req: ScoreRequest) -> Dict[str, Any]:
-    amount = float(req.loan_amount)
-    tenor = int(req.loan_tenor_months or 36)
+def api_get(path: str):
+    url = f"{API_BASE_URL}{path}"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        st.error(f"API error: {e}")
+        return None
 
-    # DTI – dùng income nếu có, fallback sang dti %
-    if req.annual_income and req.annual_income > 0:
-        dti = amount / req.annual_income
-    elif req.dti:
-        dti = float(req.dti) / 100.0
+
+# =========================
+#  Citizen Portal
+# =========================
+
+def page_citizen(username: str):
+    st.title("PB-025 – Cổng công dân (Citizen Portal)")
+    st.caption("Form demo gửi yêu cầu cấp quyền truy xuất dữ liệu tín dụng.")
+
+    with st.form("consent_form"):
+        national_id = st.text_input("Số CCCD/CMND", "012345678901")
+        bank_code = st.selectbox("Ngân hàng", ["Bank A", "Bank B (Demo)", "Bank C"])
+        scope_credit = st.checkbox("Lịch sử CIC", True)
+        scope_utility = st.checkbox("Hóa đơn điện nước", True)
+        scope_income = st.checkbox("Thông tin thu nhập", False)
+        submitted = st.form_submit_button("GỬI YÊU CẦU CONSENT")
+
+    if submitted:
+        st.success("Demo: Yêu cầu consent đã được ghi nhận (offline).")
+        st.json(
+            {
+                "national_id": national_id,
+                "bank_code": bank_code,
+                "scope_credit": scope_credit,
+                "scope_utility": scope_utility,
+                "scope_income": scope_income,
+            }
+        )
+        st.info("Trong bản MVP này chưa gọi API thật cho consent – chỉ minh họa luồng UI.")
+
+
+# =========================
+#  Banker Portal
+# =========================
+
+def page_banker(username: str):
+    st.title("PB-025 – Banking View (Banker Portal)")
+    st.caption("Form demo gửi hồ sơ vay cho AI Scoring")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        product = st.selectbox("Loan Product", ["Personal Loan", "Mortgage", "Auto Loan"])
+        tenor = st.number_input("Loan Tenure (Months)", min_value=6, max_value=120, value=36, step=6)
+        income = st.number_input(
+            "Customer Annual Income (VND)",
+            min_value=10_000_000,
+            value=20_000_000,
+            step=5_000_000,
+        )
+        amount = st.number_input(
+            "Requested Loan Amount (VND)",
+            min_value=10_000_000,
+            value=200_000_000,
+            step=10_000_000,
+        )
+
+    with col2:
+        dti = st.number_input(
+            "Debt-To-Income (DTI) %",
+            min_value=5.0,
+            max_value=95.0,
+            value=40.0,
+            step=1.0,
+        )
+        grade = st.selectbox("Current CIC-like Grade", ["A", "B", "C", "D", "E"], index=0)
+        home = st.selectbox("Home Ownership", ["OWN", "MORTGAGE", "RENT"])
+        purpose = st.selectbox(
+            "Purpose of Loan",
+            ["debt_consolidation", "small_business", "education", "home_improvement"],
+            index=0,
+        )
+
+    if st.button("GỬI YÊU CẦU THẨM ĐỊNH"):
+        payload = {
+            "national_id": f"demo-{username}",
+            "loan_amount": float(amount),
+            "loan_tenor_months": int(tenor),
+            "annual_income": float(income),
+            "dti": float(dti),
+            "grade": grade,
+            "home_ownership": home,
+            "purpose": purpose,
+        }
+        data = api_post("/api/v1/score", payload)
+        if not data:
+            return
+
+        st.success("Đã nhận kết quả từ AI Scoring")
+
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("PD 12M (%)", f"{data['pd']:.2f}")
+        with col_b:
+            st.metric("Credit score (demo)", data["credit_score"])
+        with col_c:
+            st.metric("Risk band", data["grade_bucket"])
+
+        st.write("Policy decision (demo):")
+        st.info(data["policy_decision"])
+        st.caption(f"Audit ID: {data['audit_id']} – Model: {data['model_version']}")
+
+        with st.expander("Key factors (VI)"):
+            for f in data.get("factors_vi", []):
+                st.write("- ", f)
+
+        with st.expander("Key factors (EN)"):
+            for f in data.get("factors_en", []):
+                st.write("- ", f)
+
+
+# =========================
+#  Supervisor Portal
+# =========================
+
+def page_supervisor(username: str):
+    st.title("PB-025 – Dashboard Giám sát (Supervisor / Regulator Portal)")
+    st.caption("Dùng synthetic stats để minh hoạ – không phải dữ liệu thật.")
+
+    data = api_get("/api/v1/dashboard/summary")
+    if not data:
+        return
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Tập Train")
+        st.metric("Số khoản vay", data["train_total"])
+        st.metric("Bad rate", f"{data['train_bad_rate'] * 100:.2f}%")
+    with col2:
+        st.subheader("Tập Test")
+        st.metric("Số khoản vay", data["test_total"])
+        st.metric("Bad rate", f"{data['test_bad_rate'] * 100:.2f}%")
+
+    st.subheader("Phân bố theo Grade (Train)")
+    grade_bd = data.get("grade_breakdown", {})
+    if not grade_bd:
+        st.info("Không có dữ liệu grade.")
     else:
-        dti = 0.4  # default 40%
+        for g, info in grade_bd.items():
+            st.write(
+                f"Grade {g}: {info['count']} khoản vay – bad rate ~ {info['bad_rate']*100:.1f}%"
+            )
 
-    # baseline PD ~ hàm của amount + dti + tenor
-    base_pd = 0.05 + 0.0000000003 * amount
-    base_pd += max(dti - 0.3, 0) * 0.4
-    if tenor > 36:
-        base_pd += (tenor - 36) * 0.001
+    st.caption(data.get("note", ""))
 
-    grade_factor = {
-        "A": -0.03,
-        "B": -0.01,
-        "C": 0.02,
-        "D": 0.05,
-        "E": 0.08,
-    }.get((req.grade or "C").upper(), 0.0)
 
-    base_pd += grade_factor
-    base_pd = max(0.005, min(base_pd, 0.7))
+# =========================
+#  Main
+# =========================
 
-    # logit + credit score demo 300–900
-    odds = base_pd / (1 - base_pd)
-    logit = math.log(odds)
-    credit_score = 800 - logit * 120
-    credit_score = max(300, min(900, credit_score))
+def main():
+    st.set_page_config(
+        page_title="PB-025 Credit Demo",
+        page_icon="💳",
+        layout="wide",
+    )
 
-    # risk band
-    if base_pd < 0.03:
-        band = "A"
-    elif base_pd < 0.06:
-        band = "B"
-    elif base_pd < 0.12:
-        band = "C"
-    elif base_pd < 0.25:
-        band = "D"
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.session_state.role = None
+
+    st.sidebar.title("PB-025 Demo Login")
+
+    if not st.session_state.logged_in:
+        username = st.sidebar.selectbox("User", list(USERS.keys()))
+        password = st.sidebar.text_input("Password", type="password")
+        if st.sidebar.button("Đăng nhập"):
+            if USERS.get(username) and USERS[username]["password"] == password:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.session_state.role = USERS[username]["role"]
+                st.experimental_rerun()
+            else:
+                st.sidebar.error("Sai user hoặc password.")
+        st.sidebar.caption(f"API_BASE_URL = {API_BASE_URL}")
+        st.info("Đăng nhập để xem giao diện Citizen / Banker / Supervisor.")
+        return
+
+    if st.sidebar.button("Đăng xuất"):
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.session_state.role = None
+        st.experimental_rerun()
+
+    st.sidebar.write(f"Xin chào, **{st.session_state.username}**")
+    st.sidebar.write(f"Role: `{st.session_state.role}`")
+    st.sidebar.caption(f"API_BASE_URL = {API_BASE_URL}")
+
+    role = st.session_state.role
+    if role == "citizen":
+        page_citizen(st.session_state.username)
+    elif role == "banker":
+        page_banker(st.session_state.username)
+    elif role == "supervisor":
+        page_supervisor(st.session_state.username)
     else:
-        band = "E"
-
-    # policy demo
-    if band in ("A", "B"):
-        policy = "PHÊ DUYỆT (demo)"
-    elif band == "C":
-        policy = "PHÊ DUYỆT có điều kiện (demo)"
-    elif band == "D":
-        policy = "XEM XÉT THÊM – YÊU CẦU TÀI SẢN BẢO ĐẢM (demo)"
-    else:
-        policy = "TỪ CHỐI / GIẢM HẠN MỨC (demo)"
-
-    # factors tiếng Việt
-    factors_vi = []
-    if dti > 0.6:
-        factors_vi.append("DTI cao (>60%) – rủi ro gánh nặng nợ.")
-    if amount > 500_000_000:
-        factors_vi.append("Khoản vay lớn – cần thẩm định bổ sung.")
-    if (req.grade or "").upper() in ("D", "E"):
-        factors_vi.append("CIC-like grade thấp (D/E).")
-    if not factors_vi:
-        factors_vi.append("Hồ sơ nằm trong ngưỡng rủi ro chấp nhận được.")
-
-    # factors tiếng Anh
-    factors_en = [
-        "High DTI (>60%) – debt burden risk." if dti > 0.6 else "",
-        "Large exposure amount – require extra checks."
-        if amount > 500_000_000
-        else "",
-        "Low CIC-like grade (D/E)." if (req.grade or "").upper() in ("D", "E") else "",
-    ]
-    factors_en = [f for f in factors_en if f] or ["Risk level acceptable for demo."]
-
-    citizen_hash = _hash_citizen(req.national_id)
-    audit_id = f"A-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
-
-    # trả cả field old + new để UI dùng thoải mái
-    result = {
-        "citizen_hash": citizen_hash,
-        "audit_id": audit_id,
-        "pd_12m": round(base_pd, 4),          # PD dạng tỷ lệ
-        "pd": round(base_pd * 100, 2),        # PD dạng %
-        "score_raw": round(logit, 4),
-        "credit_score": int(round(credit_score)),
-        "grade_bucket": band,
-        "policy_decision": policy,
-        "factors_vi": factors_vi,
-        "factors_en": factors_en,
-        "model_version": "demo-2025-11",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
-    }
-    return result
+        st.error("Role không hợp lệ.")
 
 
-# ==========
-#  Endpoints
-# ==========
-
-@app.get("/health")
-def health() -> str:
-    return "OK"
-
-
-@app.post("/api/v1/score")
-def score_endpoint(req: ScoreRequest):
-    """Endpoint chính cho Banker Portal."""
-    return _synthetic_score(req)
-
-
-@app.get("/api/v1/dashboard/summary")
-def dashboard_summary():
-    """Synthetic summary cho Supervisor Dashboard."""
-    train_total = 1_000_000
-    test_total = 200_000
-    train_bad_rate = 0.06
-    test_bad_rate = 0.065
-
-    grade_breakdown = {
-        "A": {"count": 250_000, "bad_rate": 0.01},
-        "B": {"count": 300_000, "bad_rate": 0.03},
-        "C": {"count": 250_000, "bad_rate": 0.07},
-        "D": {"count": 150_000, "bad_rate": 0.15},
-        "E": {"count": 50_000, "bad_rate": 0.30},
-    }
-
-    return {
-        "train_total": train_total,
-        "test_total": test_total,
-        "train_bad_rate": train_bad_rate,
-        "test_bad_rate": test_bad_rate,
-        "grade_breakdown": grade_breakdown,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
-        "note": "Synthetic summary cho PB-025 demo – thay bằng metric thật khi có dữ liệu.",
-    }
+if __name__ == "__main__":
+    main()
