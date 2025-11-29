@@ -9,19 +9,15 @@ services:
     command: uvicorn pb025_api:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
-    restart: unless-stopped
 
   ui:
     build:
-      context: ./frontend          # <--- Đổi từ ./backend sang ./frontend
+      context: ./frontend
       dockerfile: Dockerfile
     container_name: pb025-ui
-    # chạy Streamlit UI
-    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
     environment:
       - API_BASE_URL=http://api:8000
-    ports:
-      - "8501:8501"
     depends_on:
       - api
-
+    ports:
+      - "8501:8501"
