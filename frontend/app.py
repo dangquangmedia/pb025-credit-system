@@ -210,7 +210,7 @@ def main():
                 st.session_state.logged_in = True
                 st.session_state.username = username
                 st.session_state.role = USERS[username]["role"]
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.sidebar.error("Sai user hoặc password.")
         st.sidebar.caption(f"API_BASE_URL = {API_BASE_URL}")
@@ -221,7 +221,7 @@ def main():
         st.session_state.logged_in = False
         st.session_state.username = None
         st.session_state.role = None
-        st.experimental_rerun()
+        st.rerun()
 
     st.sidebar.write(f"Xin chào, **{st.session_state.username}**")
     st.sidebar.write(f"Role: `{st.session_state.role}`")
