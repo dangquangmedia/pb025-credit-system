@@ -4,7 +4,7 @@ import mlflow
 import mlflow.lightgbm
 import pandas as pd
 
-# 💡 import lại đúng pipeline thật của em
+# 💡 import lại đúng pipeline thật
 from core_pipeline import (
     preprocess_for_lgb,
     train_models,
@@ -12,8 +12,8 @@ from core_pipeline import (
     calculate_psi,
 )
 
-# Đường dẫn data thật của PB-025 (sửa lại cho đúng)
-DATA_PATH = os.path.join("data", "loan_2014_18.csv")   # hoặc file synthetic mới của em
+# Đường dẫn data thật của PB-025
+DATA_PATH = os.path.join("data", "loan_2014_18.csv")
 
 def main():
     # 1) Chọn / tạo experiment cho PB-025
@@ -22,10 +22,9 @@ def main():
     # 2) Load data thật
     df = pd.read_csv(DATA_PATH)
 
-    # 3) TOÀN BỘ CODE TRAIN THẬT CỦA EM ĐẶT TRONG WITH NÀY
+    # 3) TOÀN BỘ CODE TRAIN THẬT
     with mlflow.start_run(run_name="lgb_pb025_v1"):
-        # ======== ĐOẠN NÀY EM THAY BẰNG CODE HIỆN TẠI =========
-        # Ví dụ (giả định – em sửa lại theo pipeline thật):
+
         X_train, X_valid, y_train, y_valid, meta = preprocess_for_lgb(df)
 
         # train_models nên trả ra model LightGBM + params/hyperparams
@@ -42,15 +41,14 @@ def main():
         # metrics_report trả về dict các metric (AUC, KS, F1,…)
         metrics = metrics_report(y_valid, y_pred_valid)
 
-        # PSI giữa train & valid (tuỳ em đang gọi như thế nào)
+        # PSI giữa train & valid 
         psi_df = calculate_psi(
-            ref_scores=train_info["train_scores"],   # ví dụ, sửa cho đúng
+            ref_scores=train_info["train_scores"],  
             cur_scores=train_info["valid_scores"],
         )
         psi_value = float(psi_df["PSI"].mean())
-        # =============== HẾT ĐOẠN EM CẦN TUỲ BIẾN =================
 
-        # 4) Log hyperparameters (ví dụ)
+        # 4) Log hyperparameters 
         mlflow.log_params({
             "model_type": "lightgbm",
             "n_estimators": lgb_model.n_estimators,
@@ -73,7 +71,7 @@ def main():
         psi_df.to_csv(psi_path, index=False)
         mlflow.log_artifact(psi_path, artifact_path="diagnostics")
 
-        # Nếu em có SHAP, feature importance, confusion matrix,… => lưu file & log_artifact tương tự
+        # Nếu có SHAP, feature importance, confusion matrix,… => lưu file & log_artifact tương tự
 
         # 7) Log luôn model LightGBM vào MLflow
         #    (signature & input_example em có thể thêm sau)
