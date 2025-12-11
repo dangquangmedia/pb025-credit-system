@@ -10,8 +10,7 @@ from sklearn.metrics import roc_auc_score
 
 
 def main():
-    # Lấy tracking URI từ biến môi trường (nếu có),
-    # nếu không thì dùng thẳng địa chỉ EC2 của bạn
+    # Lấy tracking URI từ biến môi trường (nếu có),hoặc dùng thẳng địa chỉ EC2
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://34.204.202.24:5000")
     mlflow.set_tracking_uri(tracking_uri)
 
