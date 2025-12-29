@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import streamlit as st
+import math
 
 # ================== CONFIG CƠ BẢN ==================
 
@@ -340,22 +341,134 @@ def view_citizen_portal():
 # ================== BANKER PORTAL ==================
 
 
-def view_banker_portal():
-    sidebar_info()
+
+# ================== BANKER SCORING POLICY (V1) ==================
+
+POLICY_VERSION = "PB025_BANK_V1.0"
+
+def clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+def money_fmt(vnd: float) -> str:
+    try:
+        return f"{int(vnd):,}".replace(",", ".")
+    except:
+        return str(vnd)
+
+def dti_calc_simple(annual_income: float, loan_amount: float, tenure_months: int) -> float:
+    """
+    Demo DTI: xấp xỉ tỷ lệ trả nợ/tháng trên thu nhập/tháng.
+    Giả sử trả đều gốc, bỏ qua lãi (đủ cho demo).
+    """
+    if annual_income <= 0 or tenure_months <= 0:
+        return 0.0
+    monthly_income = annual_income / 12.0
+    monthly_payment = loan_amount / tenure_months
+    dti = (monthly_payment / monthly_income) * 100.0
+    return clamp(dti, 0.0, 200.0)
+
+def score_cic_grade(grade: str) -> int:
+    mapping = {"A": 120, "B": 80, "C": 40, "D": 0, "E": -80}
+    return mapping.get(grade, 0)
+
+def score_dti(dti: float) -> int:
+    if dti < 30: return 120
+    if 30 <= dti < 40: return 60
+    if 40 <= dti < 50: return 0
+    if 50 <= dti < 60: return -60
+    return -120
+
+def score_income(annual_income: float) -> int:
+    # annual_income VND
+    if annual_income > 500_000_000: return 80
+    if 300_000_000 <= annual_income <= 500_000_000: return 50
+    if 150_000_000 <= annual_income < 300_000_000: return 20
+    return -40
+
+def score_loan_vs_income(annual_income: float, loan_amount: float) -> int:
+    if annual_income <= 0:
+        return -80
+    ratio = loan_amount / annual_income
+    if ratio <= 2: return 40
+    if 2 < ratio <= 3: return 10
+    if 3 < ratio <= 5: return -30
+    return -80
+
+def score_home(home: str) -> int:
+    mapping = {"OWN": 50, "MORTGAGE": 20, "RENT": -20}
+    return mapping.get(home, 0)
+
+def score_tenure(months: int) -> int:
+    if 12 <= months <= 36: return 30
+    if 36 < months <= 60: return 10
+    if months > 60: return -20
+    return 0
+
+def score_purpose(purpose: str) -> int:
+    mapping = {
+        "personal": 20,
+        "debt_consolidation": 10,
+        "business": 0,
+        "speculative": -40,
+        "other": 0,
+    }
+    return mapping.get(purpose, 0)
+
+def score_risk_flags(flags_count: int) -> int:
+    if flags_count <= 0: return 20
+    if flags_count == 1: return -10
+    return -40
+
+def score_to_grade(score: int):
+    # 300–850
+    if score >= 800: return ("A+", "🟢")
+    if score >= 740: return ("A", "🟢")
+    if score >= 670: return ("B", "🟡")
+    if score >= 580: return ("C", "🟠")
+    if score >= 500: return ("D", "🔴")
+    return ("E", "🔴")
+
+def score_color(score: int) -> str:
+    # CIC-like color mapping
+    if score >= 800: return "#16A34A"   # green
+    if score >= 740: return "#22C55E"
+    if score >= 670: return "#EAB308"   # yellow
+    if score >= 580: return "#F97316"   # orange
+    if score >= 500: return "#EF4444"   # red
+    return "#B91C1C"                    # dark red
+
+def render_score_gauge(score: int):
+    score = clamp(score, 300, 850)
+    pct = (score - 300) / (850 - 300) * 100.0
+    color = score_color(score)
 
     st.markdown(
-        """
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
-          <div style="width:44px;height:44px;border-radius:999px;
-                      background:#0EA5E9;color:white;display:flex;
-                      align-items:center;justify-content:center;
-                      font-weight:600;font-size:18px;">
-            PB
+        f"""
+        <div style="background:white;border-radius:16px;padding:16px;border:1px solid #E5E7EB;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;">
+            <div>
+              <div style="font-size:12px;color:#6B7280;">Credit score (CIC-scale)</div>
+              <div style="font-size:34px;font-weight:700;line-height:1;">{score}</div>
+            </div>
+            <div style="font-size:12px;color:#6B7280;text-align:right;">
+              <div>Range: 300 – 850</div>
+              <div style="margin-top:4px;">
+                <span style="display:inline-flex;align-items:center;gap:8px;">
+                  <span style="width:10px;height:10px;background:{color};border-radius:999px;display:inline-block;"></span>
+                  <span style="font-weight:600;color:#111827;">{score_to_grade(score)[0]}</span>
+                </span>
+              </div>
+            </div>
           </div>
-          <div>
-            <div style="font-size:20px;font-weight:600;">Banking Dashboard – Thẩm định PB-025</div>
-            <div style="font-size:12px;color:#6B7280;">
-              Kết nối NDOP (mô phỏng) • CIC (mô phỏng) • AI Scoring • Human Oversight • Audit Trail
+
+          <div style="margin-top:14px;">
+            <div style="position:relative;height:12px;border-radius:999px;overflow:hidden;background:linear-gradient(90deg,#B91C1C,#EF4444,#F97316,#EAB308,#22C55E,#16A34A);">
+              <div style="position:absolute;left:{pct}%;top:-6px;transform:translateX(-50%);">
+                <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid #111827;"></div>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#6B7280;margin-top:6px;">
+              <span>300</span><span>500</span><span>580</span><span>670</span><span>740</span><span>850</span>
             </div>
           </div>
         </div>
@@ -363,139 +476,324 @@ def view_banker_portal():
         unsafe_allow_html=True,
     )
 
-    tab_main, tab_fallback = st.tabs(["Thẩm định PB-025", "Fallback Mode / No-Consent"])
+def pill(text: str, tone: str = "green"):
+    colors = {
+        "green": ("#DCFCE7", "#16A34A"),
+        "red": ("#FEE2E2", "#DC2626"),
+        "yellow": ("#FEF9C3", "#CA8A04"),
+        "blue": ("#DBEAFE", "#2563EB"),
+        "gray": ("#E5E7EB", "#4B5563"),
+    }
+    bg, fg = colors.get(tone, colors["gray"])
+    st.markdown(
+        f"""
+        <span style="
+            display:inline-flex;
+            align-items:center;
+            padding:2px 10px;
+            border-radius:999px;
+            font-size:11px;
+            font-weight:600;
+            background:{bg};
+            color:{fg};
+        ">{text}</span>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # ---- TAB CHÍNH ----
+def breakdown_table(rows):
+    """
+    rows: list of dict {
+      key, label, weight, value, points, note
+    }
+    """
+    st.markdown(
+        """
+        <div style="background:white;border-radius:16px;padding:16px;border:1px solid #E5E7EB;">
+          <div style="font-weight:700;margin-bottom:6px;">Breakdown (8 tiêu chí)</div>
+          <div style="font-size:12px;color:#6B7280;margin-bottom:12px;">
+            Policy: <b>PB025_BANK_V1.0</b> • Điểm cộng/trừ hiển thị theo từng tiêu chí để tránh “đổi trọng số mà score không đổi”.
+          </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # header
+    st.markdown(
+        """
+        <div style="display:grid;grid-template-columns: 2.4fr 0.8fr 1.0fr 0.9fr;gap:10px;
+                    padding:10px 10px;border-radius:12px;background:#F9FAFB;border:1px solid #EEF2F7;
+                    font-size:12px;color:#374151;font-weight:700;">
+          <div>Tiêu chí</div><div>Trọng số</div><div>Giá trị</div><div>Điểm (+/-)</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    for r in rows:
+        pts = r["points"]
+        pts_color = "#16A34A" if pts > 0 else ("#DC2626" if pts < 0 else "#6B7280")
+        st.markdown(
+            f"""
+            <div style="display:grid;grid-template-columns: 2.4fr 0.8fr 1.0fr 0.9fr;gap:10px;
+                        padding:10px 10px;border-bottom:1px solid #F1F5F9;font-size:12px;align-items:center;">
+              <div>
+                <div style="font-weight:600;color:#111827;">{r["label"]}</div>
+                <div style="color:#6B7280;font-size:11px;">{r.get("note","")}</div>
+              </div>
+              <div style="color:#111827;font-weight:600;">{r["weight"]}</div>
+              <div style="color:#111827;">{r["value"]}</div>
+              <div style="font-weight:800;color:{pts_color};">{pts:+d}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def banker_recommendation(score: int, dti: float, consent_ok: bool = True):
+    """
+    Demo OPA-like decision
+    """
+    if not consent_ok:
+        return ("FALLBACK_REQUIRED", "Consent không hợp lệ → bật Fallback (phi-PII).", "red")
+
+    if score >= 740 and dti < 45:
+        return ("APPROVE", "PHÊ DUYỆT • Điều kiện chuẩn.", "green")
+    if score >= 670:
+        return ("APPROVE_COND", "PHÊ DUYỆT CÓ ĐIỀU KIỆN • Giảm hạn mức 10% / yêu cầu sao kê 6 tháng.", "yellow")
+    if score >= 580:
+        return ("MANUAL_REVIEW", "CHUYỂN THẨM ĐỊNH THỦ CÔNG (Human-in-the-loop).", "yellow")
+    return ("DENY", "TỪ CHỐI / GIẢM HẠN MỨC (rủi ro cao).", "red")
+
+
+# ================== BANKER VIEW (UI MỚI) ==================
+
+def view_banker_portal():
+    # Header
+    st.markdown(
+        """
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+          <div style="width:44px;height:44px;border-radius:999px;
+                      background:#0EA5E9;color:white;display:flex;
+                      align-items:center;justify-content:center;
+                      font-weight:700;font-size:18px;">
+            PB
+          </div>
+          <div>
+            <div style="font-size:22px;font-weight:800;">Banking Dashboard — Thẩm định PB-025</div>
+            <div style="font-size:12px;color:#6B7280;">
+              NDOP → Consent → Scoring → Audit (demo) • Policy version hiển thị rõ để audit/trace thay đổi trọng số.
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    tab_main, tab_fallback = st.tabs(["Yêu cầu mới", "Fallback Mode (No-Consent)"])
+
+    # ================== TAB MAIN ==================
     with tab_main:
-        col_left, col_right = st.columns([1.1, 1])
+        left, right = st.columns([1.15, 1])
 
-        with col_left:
-            def body_form():
-                loan_product = st.selectbox(
-                    "Sản phẩm vay",
-                    ["Vay tiêu dùng", "Vay mua nhà", "Vay mua ô tô"],
-                    index=0,
-                )
-                col_row1 = st.columns(2)
-                with col_row1[0]:
-                    loan_amount = st.number_input(
-                        "Số tiền vay mong muốn (VND)", 0, step=1_000_000, value=200_000_000
-                    )
-                with col_row1[1]:
-                    tenure = st.number_input("Thời hạn vay (tháng)", 1, 120, 36)
-
-                col_row2 = st.columns(2)
-                with col_row2[0]:
-                    income = st.number_input(
-                        "Thu nhập bình quân năm (VND)", 0, step=1_000_000, value=200_000_000
-                    )
-                with col_row2[1]:
-                    dti = st.number_input("Debt-To-Income (DTI) %", 0.0, 200.0, 40.0, 0.1)
-
-                col_row3 = st.columns(2)
-                with col_row3[0]:
-                    grade = st.selectbox(
-                        "Điểm CIC hiện tại (mock)", ["A", "B", "C", "D", "E"], index=0
-                    )
-                with col_row3[1]:
-                    home = st.selectbox("Hình thức nhà ở", ["OWN", "RENT"], index=0)
-
-                purpose = st.selectbox(
-                    "Mục đích vay",
-                    ["debt_consolidation", "home_improvement", "education", "other"],
-                    index=0,
-                )
-
-                if st.button("GỬI YÊU CẦU THẨM ĐỊNH"):
-                    payload = {
-                        "loan_product": loan_product,
-                        "loan_amount": loan_amount,
-                        "tenor_months": tenure,
-                        "annual_income": income,
-                        "dti": dti,
-                        "cic_grade": grade,
-                        "home_ownership": home,
-                        "purpose": purpose,
-                    }
-                    # gọi API thật nếu muốn – hiện demo dùng giá trị cố định
-                    _data, err = call_api("/api/v1/score-demo", payload)
-                    if err:
-                        st.session_state["demo_score"] = {
-                            "pd_12m": 0.28,
-                            "score": 621,
-                            "band": "Hạng 03 – Tốt",
-                            "decision": "PHÊ DUYỆT có điều kiện (demo)",
-                        }
-                        st.info(
-                            "Demo: Đã nhận kết quả từ AI Scoring (mock). "
-                            f"(API lỗi: {err})"
-                        )
-                    else:
-                        # bạn map _data -> demo_score theo schema thật ở đây
-                        st.session_state["demo_score"] = {
-                            "pd_12m": _data.get("pd_12m", 0.28),
-                            "score": _data.get("score", 621),
-                            "band": _data.get("band", "Hạng 03 – Tốt"),
-                            "decision": _data.get("decision", "PHÊ DUYỆT (demo)"),
-                        }
-                        st.success("Đã nhận kết quả từ AI Scoring (demo).")
-
-            card(
-                "Tạo yêu cầu thẩm định tín dụng",
-                body_form,
-                "Form demo gửi hồ sơ vay cho AI Scoring.",
+        with left:
+            st.markdown(
+                """
+                <div style="background:white;border-radius:16px;padding:16px;border:1px solid #E5E7EB;">
+                  <div style="font-weight:800;font-size:16px;margin-bottom:4px;">Tạo yêu cầu thẩm định tín dụng</div>
+                  <div style="font-size:12px;color:#6B7280;margin-bottom:12px;">
+                    Bước 1: Nhập thông tin • Bước 2: Tính DTI tự động • Bước 3: Chấm điểm & gợi ý quyết định
+                  </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-        with col_right:
-            def body_result():
-                data = st.session_state.get(
-                    "demo_score",
-                    {
-                        "pd_12m": 0.28,
-                        "score": 621,
-                        "band": "Hạng 03 – Tốt",
-                        "decision": "PHÊ DUYỆT có điều kiện (demo)",
-                    },
-                )
-                st.markdown("##### Kết quả chấm điểm tín dụng (AI + OPA – demo)")
-                colr1, colr2, colr3 = st.columns(3)
-                with colr1:
-                    st.caption("PD (vỡ nợ 12 tháng – demo)")
-                    st.markdown(
-                        f"<div style='font-size:28px;font-weight:600;'>{data['pd_12m']*100:.1f}%</div>",
-                        unsafe_allow_html=True,
-                    )
-                with colr2:
-                    st.caption("Điểm tín dụng (CIC-scale – demo)")
-                    st.markdown(
-                        f"<div style='font-size:28px;font-weight:600;'>{data['score']}</div>",
-                        unsafe_allow_html=True,
-                    )
-                with colr3:
-                    st.caption("Phân hạng rủi ro")
-                    pill(data["band"], "yellow")
+            c1, c2 = st.columns(2)
+            with c1:
+                national_id = st.text_input("Số CCCD khách hàng", "012345678900")
+                org = st.selectbox("Tổ chức yêu cầu", ["Ngân hàng B (demo)", "Ngân hàng A (demo)", "Ngân hàng C (demo)"])
+                purpose = st.selectbox("Mục đích vay", ["personal", "debt_consolidation", "business", "speculative", "other"], index=1)
+                home = st.selectbox("Home Ownership", ["OWN", "MORTGAGE", "RENT"], index=0)
+            with c2:
+                annual_income = st.number_input("Customer Annual Income (VND)", min_value=0, step=1_000_000, value=200_000_000)
+                loan_amount = st.number_input("Requested Loan Amount (VND)", min_value=0, step=1_000_000, value=200_000_000)
+                tenure = st.number_input("Loan Tenure (Months)", min_value=1, max_value=120, value=36)
+                cic_grade = st.selectbox("Current CIC-like Grade", ["A", "B", "C", "D", "E"], index=0)
 
-                st.write("")
-                st.caption("Khuyến nghị (Policy Engine – mô phỏng):")
-                st.markdown(
-                    "- Đề xuất: **PHÊ DUYỆT có điều kiện** • Giảm hạn mức 10% • Yêu cầu sao kê lương 6 tháng.",
-                    unsafe_allow_html=True,
+            # Risk flags (demo)
+            st.write("")
+            flags = st.multiselect(
+                "Risk flags (demo)",
+                ["Recent delinquencies", "Income instability", "Fraud watch", "High utilization cluster"],
+                default=[],
+            )
+            flags_count = len(flags)
+
+            # DTI auto
+            dti = dti_calc_simple(annual_income, loan_amount, int(tenure))
+            st.write("")
+            col_dti1, col_dti2 = st.columns([1, 1])
+            with col_dti1:
+                st.text_input("Debt-To-Income (DTI) % (auto)", value=f"{dti:.2f}", disabled=True)
+            with col_dti2:
+                ratio = (loan_amount / annual_income) if annual_income > 0 else 999.0
+                st.text_input("Loan / Annual Income (auto)", value=f"{ratio:.2f}x", disabled=True)
+
+            st.write("")
+            st.caption(f"Policy version: {POLICY_VERSION}")
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # ================== SCORE + BREAKDOWN ==================
+        with right:
+            base = 500
+
+            p1 = score_cic_grade(cic_grade)
+            p2 = score_dti(dti)
+            p3 = score_income(annual_income)
+            p4 = score_loan_vs_income(annual_income, loan_amount)
+            p5 = score_home(home)
+            p6 = score_tenure(int(tenure))
+            p7 = score_purpose(purpose)
+            p8 = score_risk_flags(flags_count)
+
+            raw_total = base + p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8
+            final_score = int(clamp(raw_total, 300, 850))
+            grade, emoji = score_to_grade(final_score)
+
+            # Render gauge
+            render_score_gauge(final_score)
+
+            # Decision
+            st.write("")
+            decision, decision_text, tone = banker_recommendation(final_score, dti, consent_ok=True)
+            wrap_bg = {"green": "#ECFDF5", "yellow": "#FFFBEB", "red": "#FEF2F2"}.get(tone, "#F3F4F6")
+            wrap_border = {"green": "#A7F3D0", "yellow": "#FDE68A", "red": "#FECACA"}.get(tone, "#E5E7EB")
+
+            st.markdown(
+                f"""
+                <div style="background:{wrap_bg};border:1px solid {wrap_border};border-radius:14px;padding:12px;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div style="font-weight:800;">Kết luận (AI + Policy — demo)</div>
+                    <div style="font-size:12px;color:#6B7280;">Decision: <b>{decision}</b></div>
+                  </div>
+                  <div style="margin-top:6px;font-size:13px;">{decision_text}</div>
+                  <div style="margin-top:8px;font-size:12px;color:#6B7280;">
+                    Risk grade: <b>{grade}</b> {emoji} • DTI: <b>{dti:.2f}%</b>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            st.write("")
+
+            rows = [
+                {"label": "Current CIC-like Grade", "weight": "20%", "value": cic_grade, "points": p1,
+                 "note": "A:+120 • B:+80 • C:+40 • D:0 • E:-80"},
+                {"label": "Debt-To-Income (DTI %)", "weight": "25%", "value": f"{dti:.2f}%", "points": p2,
+                 "note": "<30:+120 • 30–40:+60 • 40–50:0 • 50–60:-60 • >60:-120"},
+                {"label": "Annual Income (VND)", "weight": "15%", "value": money_fmt(annual_income), "points": p3,
+                 "note": ">500tr:+80 • 300–500:+50 • 150–300:+20 • <150:-40"},
+                {"label": "Loan Amount vs Income", "weight": "10%", "value": f"{ratio:.2f}x", "points": p4,
+                 "note": "≤2x:+40 • 2–3x:+10 • 3–5x:-30 • >5x:-80"},
+                {"label": "Home Ownership", "weight": "10%", "value": home, "points": p5,
+                 "note": "OWN:+50 • MORTGAGE:+20 • RENT:-20"},
+                {"label": "Loan Tenure (Months)", "weight": "8%", "value": str(int(tenure)), "points": p6,
+                 "note": "12–36:+30 • 36–60:+10 • >60:-20"},
+                {"label": "Loan Purpose", "weight": "7%", "value": purpose, "points": p7,
+                 "note": "personal:+20 • debt_consolidation:+10 • business:0 • speculative:-40"},
+                {"label": "Stability / Risk Flags", "weight": "5%", "value": f"{flags_count} flag(s)", "points": p8,
+                 "note": "0:+20 • 1:-10 • ≥2:-40"},
+            ]
+
+            breakdown_table(rows)
+
+            st.write("")
+            with st.expander("Xem công thức tính (demo)"):
+                st.code(
+                    f"""Base=500
+Score = clamp( Base
+  + CIC({cic_grade})={p1}
+  + DTI({dti:.2f}%)={p2}
+  + Income({annual_income})={p3}
+  + Loan/Income({ratio:.2f}x)={p4}
+  + Home({home})={p5}
+  + Tenure({int(tenure)})={p6}
+  + Purpose({purpose})={p7}
+  + RiskFlags({flags_count})={p8}
+, 300..850)
+= {final_score}""",
+                    language="text",
                 )
 
-                st.write("")
-                st.caption("Các yếu tố ảnh hưởng (Top 5 – SHAP, synthetic):")
-                st.markdown(
-                    """
-                    - Tỷ lệ sử dụng tín dụng hơi cao  
-                    - Không có nợ xấu 12 tháng (tích cực)  
-                    - Lịch sử tín dụng &gt; 36 tháng  
-                    - DTI ở mức chấp nhận được  
-                    - Thói quen thanh toán đúng hạn
-                    """,
-                    unsafe_allow_html=True,
-                )
+    # ================== TAB FALLBACK ==================
+    with tab_fallback:
+        st.markdown(
+            """
+            <div style="background:white;border-radius:16px;padding:16px;border:1px solid #E5E7EB;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div style="font-weight:800;font-size:16px;">Banking Dashboard — Fallback Mode (No-Consent)</div>
+                <div style="padding:4px 10px;border-radius:999px;background:#F3F4F6;color:#111827;font-size:12px;font-weight:700;">
+                  FALLBACK • ACTIVE
+                </div>
+              </div>
+              <div style="font-size:12px;color:#6B7280;margin-top:6px;">
+                Consent không hợp lệ → không gọi NDOP/CIC • chỉ dùng tín hiệu phi-PII để hỗ trợ quyết định thủ công.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.write("")
+        l1, r1 = st.columns([1.1, 1])
+        with l1:
+            st.markdown(
+                """
+                <div style="background:white;border-radius:16px;padding:16px;border:1px solid #E5E7EB;">
+                  <div style="font-weight:800;">Tóm tắt yêu cầu</div>
+                  <div style="font-size:12px;color:#6B7280;margin-top:6px;">Hồ sơ minh hoạ — không dùng dữ liệu thật</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.text_input("Số CCCD khách hàng", "012345678900", disabled=True)
+            st.text_input("Số tiền vay", "120.000.000", disabled=True)
+            st.text_input("Sản phẩm vay", "Vay tiêu dùng", disabled=True)
+            st.text_input("Mục đích vay", "Mua đồ gia dụng, chi tiêu gia đình…", disabled=True)
+            st.write("")
+            pill("Không có consent hợp lệ", "red")
+            st.caption("Consent-ID: —  Lý do: Chưa cấp / Hết hạn / Đã thu hồi")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-            card("Kết quả thẩm định", body_result)
+        with r1:
+            st.markdown(
+                """
+                <div style="background:white;border-radius:16px;padding:16px;border:1px solid #E5E7EB;">
+                  <div style="font-weight:800;">Kết quả Fallback (phi-PII)</div>
+                  <div style="font-size:12px;color:#6B7280;margin-top:6px;">Không xử lý, không lưu PII • chỉ hỗ trợ thẩm định thủ công</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            pill("MEDIUM", "yellow")
+            st.caption("Confidence: ~60% (demo)")
+            st.write("")
+            st.markdown(
+                """
+                **Tín hiệu phi-PII tổng hợp**
+                - Thói quen thanh toán tiện ích đều (gián tiếp)  
+                - Biến động chi tiêu 3 tháng gần đây ổn định (ẩn danh)  
+                - Không có cảnh báo gian lận từ đối tác viễn thông (ẩn danh)
+                """,
+                unsafe_allow_html=True,
+            )
+            st.write("")
+            cta1, cta2, cta3 = st.columns(3)
+            with cta1: st.button("YÊU CẦU BỔ SUNG")
+            with cta2: st.button("TIẾP NHẬN SƠ BỘ")
+            with cta3: st.button("TỪ CHỐI TẠM THỜI")
+            st.markdown("</div>", unsafe_allow_html=True)
+
 
     # ---- TAB FALLBACK ----
     with tab_fallback:
